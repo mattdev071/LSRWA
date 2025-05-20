@@ -7,6 +7,9 @@ use crate::api::blockchain::{BlockchainStateManager, BlockchainStateSummary, OnC
 use crate::api::error::ApiResult;
 use crate::api::AppState;
 use crate::models::blockchain_request::RequestType;
+use crate::models::kyc::{KycVerificationRequest, KycVerificationResponse, KycWebhookPayload, KycVerificationResult};
+use crate::models::user::KycStatus;
+use sqlx::types::Uuid;
 
 /// Get blockchain state summary
 pub async fn get_blockchain_state_summary(
@@ -120,4 +123,73 @@ pub async fn refresh_blockchain_state(
     
     // Return the updated summary
     get_blockchain_state_summary(State(state)).await
+}
+
+/// Initiate KYC verification
+pub async fn initiate_kyc_verification(
+    State(state): State<AppState>,
+    Json(request): Json<KycVerificationRequest>,
+) -> ApiResult<Json<KycVerificationResponse>> {
+    // Get the KYC service for the requested provider
+    let provider = request.provider.clone();
+    let kyc_service = state.kyc_factory.create_service(provider)?;
+    
+    // Initiate the verification
+    let response = kyc_service.initiate_verification(request).await?;
+    
+    Ok(Json(response))
+}
+
+/// Check KYC verification status
+pub async fn check_kyc_verification_status(
+    State(state): State<AppState>,
+    Path(verification_id): Path<String>,
+) -> ApiResult<Json<KycStatus>> {
+    // Use the internal service for checking status
+    let kyc_service = state.kyc_factory.create_service(crate::models::kyc::KycProvider::Internal)?;
+    
+    // Check the verification status
+    let status = kyc_service.check_verification_status(&verification_id).await?;
+    
+    Ok(Json(status))
+}
+
+/// Get KYC verification details
+pub async fn get_kyc_verification_details(
+    State(state): State<AppState>,
+    Path(verification_id): Path<String>,
+) -> ApiResult<Json<KycVerificationResult>> {
+    // Use the internal service for getting details
+    let kyc_service = state.kyc_factory.create_service(crate::models::kyc::KycProvider::Internal)?;
+    
+    // Get the verification details
+    let details = kyc_service.get_verification_details(&verification_id).await?;
+    
+    Ok(Json(details))
+}
+
+/// Process KYC webhook
+pub async fn process_kyc_webhook(
+    State(state): State<AppState>,
+    Json(payload): Json<KycWebhookPayload>,
+) -> ApiResult<Json<KycVerificationResult>> {
+    // Use the internal service for processing webhooks
+    let kyc_service = state.kyc_factory.create_service(crate::models::kyc::KycProvider::Internal)?;
+    
+    // Process the webhook
+    let result = kyc_service.process_webhook(payload).await?;
+    
+    Ok(Json(result))
+}
+
+/// Get user KYC verifications
+pub async fn get_user_kyc_verifications(
+    State(state): State<AppState>,
+    Path(user_id): Path<Uuid>,
+) -> ApiResult<Json<Vec<KycVerificationResult>>> {
+    // Get all verifications for the user
+    let repository = crate::db::kyc_repository::KycRepository::new(state.db.pg.clone());
+    let verifications = repository.get_user_verifications(user_id).await?;
+    
+    Ok(Json(verifications))
 } 

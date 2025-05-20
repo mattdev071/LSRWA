@@ -5,6 +5,7 @@ pub mod balance;
 pub mod reward;
 pub mod system_parameter;
 pub mod activity_log;
+pub mod kyc;
 
 // Re-export all models for easier imports
 pub use user::*;
@@ -13,4 +14,5 @@ pub use blockchain_request::*;
 pub use balance::*;
 pub use reward::*;
 pub use system_parameter::*;
-pub use activity_log::*; 
+pub use activity_log::*;
+pub use kyc::*; 

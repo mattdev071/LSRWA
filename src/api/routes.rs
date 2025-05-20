@@ -30,10 +30,19 @@ pub fn api_router() -> Router<AppState> {
         .route("/:epoch_id", get(handlers::get_epoch_by_id))
         .route("/current", get(handlers::get_current_epoch));
     
+    // KYC endpoints
+    let kyc_routes = Router::new()
+        .route("/initiate", post(handlers::initiate_kyc_verification))
+        .route("/status/:verification_id", get(handlers::check_kyc_verification_status))
+        .route("/details/:verification_id", get(handlers::get_kyc_verification_details))
+        .route("/webhook", post(handlers::process_kyc_webhook))
+        .route("/user/:user_id", get(handlers::get_user_kyc_verifications));
+    
     // Combine all routes
     Router::new()
-        .nest("/blockchain", blockchain_routes)
-        .nest("/requests", request_routes)
-        .nest("/users", user_routes)
-        .nest("/epochs", epoch_routes)
+        .nest("/api/v1/blockchain", blockchain_routes)
+        .nest("/api/v1/requests", request_routes)
+        .nest("/api/v1/users", user_routes)
+        .nest("/api/v1/epochs", epoch_routes)
+        .nest("/api/v1/kyc", kyc_routes)
 } 

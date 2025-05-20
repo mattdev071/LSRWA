@@ -5,7 +5,7 @@ use tokio::sync::RwLock;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use lsrwa_express_rust::api::{self, blockchain::BlockchainState};
+use lsrwa_express_rust::api::{self, blockchain::BlockchainState, kyc::KycServiceFactory};
 use lsrwa_express_rust::db;
 
 #[tokio::main]
@@ -37,10 +37,14 @@ async fn main() -> Result<()> {
     // Initialize blockchain state
     let blockchain_state = Arc::new(RwLock::new(BlockchainState::default()));
     
+    // Initialize KYC service factory
+    let kyc_factory = Arc::new(KycServiceFactory::new(pool.pg.clone()));
+    
     // Create app state
     let app_state = api::AppState {
         db: pool,
         blockchain_state,
+        kyc_factory,
     };
     
     // Build the API router

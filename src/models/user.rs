@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::types::Uuid;
 
 /// KYC status enum
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq, Eq)]
 #[sqlx(type_name = "TEXT", rename_all = "lowercase")]
 pub enum KycStatus {
     Pending,

@@ -2,25 +2,28 @@ pub mod routes;
 pub mod handlers;
 pub mod blockchain;
 pub mod error;
+pub mod kyc;
 
 use axum::Router;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use crate::db::DbPool;
+use crate::db::DbPools;
 
-/// Shared application state that will be available to all request handlers
+/// Application state shared across all routes
 #[derive(Clone)]
 pub struct AppState {
-    /// Database connection pool
-    pub db: DbPool,
-    /// Blockchain state cache
+    /// Database connection pools
+    pub db: DbPools,
+    
+    /// Blockchain state
     pub blockchain_state: Arc<RwLock<blockchain::BlockchainState>>,
+    
+    /// KYC service factory
+    pub kyc_factory: Arc<kyc::KycServiceFactory>,
 }
 
-/// Create and configure the API router with all routes
+/// Create the application router
 pub fn create_router(state: AppState) -> Router {
-    Router::new()
-        .nest("/api/v1", routes::api_router())
-        .with_state(state)
+    routes::api_router().with_state(state)
 } 
