@@ -20,7 +20,7 @@ pub async fn ensure_database_exists() -> Result<()> {
     
     // Extract the database name and server URL
     let parts: Vec<&str> = database_url.rsplitn(2, '/').collect();
-    let (db_name, server_url) = match parts.as_slice() {
+    let (db_name, _server_url) = match parts.as_slice() {
         [name, url] => (name, format!("{}/postgres", url)),
         _ => return Err(anyhow::anyhow!("Invalid DATABASE_URL format")),
     };
