@@ -1,0 +1,15 @@
+[postgres]
+# PostgreSQL connection settings
+host = "localhost"
+port = 5432
+username = "postgres"
+password = "postgres"
+database = "lsrwa_express"
+max_connections = 10
+ssl_mode = false  
+
+[mongodb]
+# MongoDB connection settings
+uri = "mongodb://localhost:27017"
+database = "lsrwa_express"
+max_pool_size = 10 
