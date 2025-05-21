@@ -117,4 +117,18 @@ pub struct RecordExecutionEventDto {
     pub amount: String,
     pub transaction_hash: String,
     pub block_number: i64,
+}
+
+/// New blockchain request - used for creating a new request
+#[derive(Debug, Clone)]
+pub struct NewBlockchainRequest {
+    pub request_type: RequestType,
+    pub on_chain_id: i64,
+    pub wallet_address: String,
+    pub amount: f64,
+    pub collateral_amount: Option<f64>,
+    pub timestamp: chrono::NaiveDateTime,
+    pub is_processed: bool,
+    pub block_number: i64,
+    pub transaction_hash: String,
 } 

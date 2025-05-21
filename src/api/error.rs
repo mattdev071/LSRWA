@@ -21,8 +21,14 @@ pub enum ApiError {
     #[error("Blockchain error: {0}")]
     Blockchain(String),
 
+    #[error("Failed to submit blockchain request")]
+    BlockchainRequestFailed,
+
     #[error("Internal server error: {0}")]
     Internal(String),
+
+    #[error("Internal server error")]
+    InternalServerError,
 
     #[error("Unauthorized: {0}")]
     Unauthorized(String),
@@ -36,7 +42,9 @@ impl IntoResponse for ApiError {
             ApiError::NotFound(ref message) => (StatusCode::NOT_FOUND, message.clone()),
             ApiError::InvalidInput(ref message) => (StatusCode::BAD_REQUEST, message.clone()),
             ApiError::Blockchain(ref message) => (StatusCode::BAD_GATEWAY, message.clone()),
+            ApiError::BlockchainRequestFailed => (StatusCode::BAD_GATEWAY, "Failed to submit blockchain request".to_string()),
             ApiError::Internal(ref message) => (StatusCode::INTERNAL_SERVER_ERROR, message.clone()),
+            ApiError::InternalServerError => (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".to_string()),
             ApiError::Unauthorized(ref message) => (StatusCode::UNAUTHORIZED, message.clone()),
         };
 

@@ -4,12 +4,11 @@
 
 # Cargo.lock is ignored for libraries but not for binaries
 # Since this is an application, you can uncomment if you want to track it
-Cargo.lock
+# Cargo.lock
 
 # Environment variables
 .env
 .env.local
-
 
 # IDE files
 .idea/

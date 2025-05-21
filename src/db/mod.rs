@@ -5,7 +5,6 @@ use std::time::Duration;
 
 pub mod migration;
 pub mod pg;
-pub mod kyc_repository;
 
 /// Database pools
 #[derive(Clone)]

@@ -4,12 +4,13 @@ version = "0.1.0"
 edition = "2021"
 description = "Database schema design and initial setup for LSRWA Express vault protocol"
 authors = ["LSRWA Team"]
+build = "build.rs"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 # Database
-sqlx = { version = "0.7.1", features = ["runtime-tokio-native-tls", "postgres", "uuid", "chrono", "json", "macros", "migrate"] }
+sqlx = { version = "0.7.1", features = ["runtime-tokio-native-tls", "postgres", "uuid", "chrono", "json", "macros", "migrate", "bigdecimal"] }
 
 # Async runtime
 tokio = { version = "1.28.1", features = ["full"] }
@@ -34,9 +35,6 @@ config = "0.13.1"
 # Utilities
 chrono = { version = "0.4.24", features = ["serde"] }
 uuid = { version = "1.3.2", features = ["v4", "serde"] }
-rand = "0.8.5"
-async-trait = "0.1.68"
-lazy_static = "1.4.0"
 
 # Web framework
 axum = { version = "0.6.18", features = ["headers", "macros"] }
@@ -44,11 +42,47 @@ tower = { version = "0.4.13", features = ["timeout"] }
 tower-http = { version = "0.4.0", features = ["trace", "cors"] }
 headers = "0.3.8"
 
-# HTTP client
-reqwest = { version = "0.11.18", features = ["json"] }
-
 # Smart contract interaction
 subxt = { version = "0.31.0", features = ["substrate-compat"] }
+hex = "0.4.3"
+# Only include ink when targeting wasm32
+ink = { version = "4.3.0", default-features = false, optional = true }
+scale = { package = "parity-scale-codec", version = "3.6.5", features = ["derive"] }
+scale-info = { version = "2.9.0", features = ["derive"] }
+
+# Monitoring and metrics
+prometheus = "0.13.3"
+metrics = "0.21.1"
+metrics-exporter-prometheus = "0.12.1"
+
+# Security
+secrecy = "0.8.0"
+ring = "0.16.20"
+bigdecimal = "0.4.8"
+
+[features]
+default = []
+contract = ["ink"]
+wasm = ["contract"]
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+ink = { version = "4.3.0", default-features = false }
+
+[build-dependencies]
+anyhow = "1.0.71"
+subxt = { version = "0.31.0", features = ["substrate-compat"] }
+serde_json = "1.0.96"
 
 [dev-dependencies]
 pretty_assertions = "1.3.0"
+mockall = "0.11.4"
+test-context = "0.1.4"
+wiremock = "0.5.19"
+
+[[bin]]
+name = "download_metadata"
+path = "scripts/download_metadata.rs"
+
+[[bin]]
+name = "deploy_contract"
+path = "scripts/deploy_contract.rs"

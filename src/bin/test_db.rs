@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
+use chrono::Utc;
 use lsrwa_express_rust::db;
 use sqlx::PgPool;
 
@@ -16,10 +16,7 @@ async fn main() -> Result<()> {
     println!("✅ Database exists or was created");
     
     // Get database connection pool
-    let pool = db::DbPool::new().await.context("Failed to create database pool")?;
-    
-    // Explicitly run migrations
-    pool.run_migrations().await.context("Failed to run migrations")?;
+    let pool = db::init_db().await.context("Failed to create database pool")?;
     
     println!("✅ Database migrations applied successfully");
     

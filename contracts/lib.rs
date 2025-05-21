@@ -83,8 +83,6 @@ mod lsrwa_express {
     pub struct User {
         wallet_address: AccountId,   // User's wallet address
         is_registered: bool,         // Whether the user is registered
-        is_kyc_approved: bool,       // Whether the user's KYC is approved
-        kyc_timestamp: Option<Timestamp>, // KYC approval timestamp
         active_balance: Balance,     // Active balance
         pending_deposits: Balance,   // Pending deposits amount
         pending_withdrawals: Balance, // Pending withdrawals amount
@@ -169,15 +167,6 @@ mod lsrwa_express {
     pub struct UserRegistered {
         #[ink(topic)]
         wallet_address: AccountId,
-        timestamp: Timestamp,
-    }
-
-    /// Event emitted when KYC status changes
-    #[ink(event)]
-    pub struct KycStatusChanged {
-        #[ink(topic)]
-        wallet_address: AccountId,
-        is_approved: bool,
         timestamp: Timestamp,
     }
 
@@ -323,7 +312,248 @@ mod lsrwa_express {
             self.users.get(wallet_address)
         }
         
-    
+        /// Creates a new deposit request
+        /// 
+        /// # Arguments
+        /// * `amount` - The amount to deposit
+        /// 
+        /// # Returns
+        /// The ID of the created request
+        #[ink(message, payable)]
+        pub fn create_deposit_request(&mut self, amount: Balance) -> Result<u128, &'static str> {
+            // Get the caller's wallet address
+            let caller = Self::env().caller();
+            
+            // Ensure amount is greater than zero
+            if amount == 0 {
+                return Err("Amount must be greater than zero");
+            }
+            
+            // Check if the user exists, if not, register them
+            let user = self.users.get(caller);
+            if user.is_none() {
+                let current_time = Self::env().block_timestamp();
+                let new_user = User {
+                    wallet_address: caller,
+                    is_registered: true, // Auto-register the user
+                    active_balance: 0,
+                    pending_deposits: 0,
+                    pending_withdrawals: 0,
+                    total_rewards: 0,
+                    registered_at: current_time,
+                };
+                
+                // Store the new user
+                self.users.insert(caller, &new_user);
+                
+                // Emit user registered event
+                Self::env().emit_event(UserRegistered {
+                    wallet_address: caller,
+                    timestamp: current_time,
+                });
+            }
+            
+            // Get current request ID and increment for next use
+            let request_id = self.next_request_id;
+            self.next_request_id += 1;
+            
+            // Get current timestamp and block number
+            let current_time = Self::env().block_timestamp();
+            let block_number = Self::env().block_number();
+            
+            // For testnet readiness, we use the current transaction hash
+            // This will give us the actual transaction hash of the call to this function
+            let tx_hash = Self::env().transaction_hash().unwrap_or_else(|| {
+                // Fallback for cases where the transaction hash is not available (e.g. in tests)
+                Self::env().hash_bytes::<ink::env::hash::Blake2x256>(
+                    &[current_time.to_be_bytes(), block_number.to_be_bytes(), caller.as_ref()].concat()
+                )
+            });
+            
+            // Create the deposit request
+            let request = Request {
+                id: request_id,
+                request_type: RequestType::Deposit,
+                wallet_address: caller,
+                amount,
+                collateral_amount: None, // Not applicable for deposits
+                timestamp: current_time,
+                is_processed: false,
+                block_number,
+                transaction_hash: tx_hash,
+            };
+            
+            // Store the request
+            self.requests.insert(request_id, &request);
+            
+            // Update request count for deposit type
+            let current_count = self.get_request_count(RequestType::Deposit);
+            self.request_count_by_type.insert(RequestType::Deposit, &(current_count + 1));
+            
+            // Store the request ID in the type-indexed mapping
+            self.request_ids_by_type.insert((RequestType::Deposit, current_count), &request_id);
+            
+            // Add the request ID to the user's deposit requests
+            let mut user_deposits = self.user_deposit_requests.get(caller).unwrap_or_default();
+            user_deposits.push(request_id);
+            self.user_deposit_requests.insert(caller, &user_deposits);
+            
+            // Update user's pending deposits
+            if let Some(mut user) = self.users.get(caller) {
+                user.pending_deposits += amount;
+                self.users.insert(caller, &user);
+            }
+            
+            // Emit deposit requested event
+            Self::env().emit_event(DepositRequested {
+                request_id,
+                wallet_address: caller,
+                amount,
+                timestamp: current_time,
+            });
+            
+            Ok(request_id)
+        }
+        
+        /// Checks if a user is registered
+        /// 
+        /// # Arguments
+        /// * `wallet_address` - The wallet address to check
+        /// 
+        /// # Returns
+        /// True if the user is registered, false otherwise
+        #[ink(message)]
+        pub fn is_registered(&self, wallet_address: AccountId) -> bool {
+            if let Some(user) = self.users.get(wallet_address) {
+                user.is_registered
+            } else {
+                false
+            }
+        }
+        
+        /// Updates a user's registration status
+        /// Can only be called by the contract owner or admin
+        /// 
+        /// # Arguments
+        /// * `wallet_address` - The wallet address to update
+        /// * `is_approved` - Whether the registration is approved
+        /// 
+        /// # Returns
+        /// Result indicating success or failure
+        #[ink(message)]
+        pub fn update_registration_status(&mut self, wallet_address: AccountId, is_approved: bool) -> Result<(), &'static str> {
+            // Only owner or admin can update registration status
+            let caller = Self::env().caller();
+            if caller != self.owner && caller != self.admin {
+                return Err("Only owner or admin can update registration status");
+            }
+            
+            // Check if the user exists
+            let mut user = self.users.get(wallet_address).ok_or("User not found")?;
+            
+            // Update registration status
+            user.is_registered = is_approved;
+            
+            // Store the updated user
+            self.users.insert(wallet_address, &user);
+            
+            // Emit user registered event if approved
+            if is_approved {
+                Self::env().emit_event(UserRegistered {
+                    wallet_address,
+                    timestamp: Self::env().block_timestamp(),
+                });
+            }
+            
+            Ok(())
+        }
+        
+        /// Process a deposit request
+        /// Can only be called by the contract owner or admin
+        /// 
+        /// # Arguments
+        /// * `request_id` - The ID of the request to process
+        /// 
+        /// # Returns
+        /// Result indicating success or failure
+        #[ink(message)]
+        pub fn process_deposit_request(&mut self, request_id: u128) -> Result<(), &'static str> {
+            // Only owner or admin can process requests
+            let caller = Self::env().caller();
+            if caller != self.owner && caller != self.admin {
+                return Err("Only owner or admin can process requests");
+            }
+            
+            // Get the request
+            let mut request = self.requests.get(request_id).ok_or("Request not found")?;
+            
+            // Ensure the request is a deposit
+            if request.request_type != RequestType::Deposit {
+                return Err("Not a deposit request");
+            }
+            
+            // Ensure the request is not already processed
+            if request.is_processed {
+                return Err("Request already processed");
+            }
+            
+            // Get the user
+            let mut user = self.users.get(request.wallet_address).ok_or("User not found")?;
+            
+            // Check if the user is registered
+            if !user.is_registered {
+                return Err("User not registered");
+            }
+            
+            // Update the user's balances
+            user.active_balance += request.amount;
+            user.pending_deposits -= request.amount;
+            
+            // Mark the request as processed
+            request.is_processed = true;
+            
+            // Store the updated user and request
+            self.users.insert(request.wallet_address, &user);
+            self.requests.insert(request_id, &request);
+            
+            // Create an execution event
+            let execution_id = self.next_execution_event_id;
+            self.next_execution_event_id += 1;
+            
+            let current_time = Self::env().block_timestamp();
+            let block_number = Self::env().block_number();
+            
+            // For testnet readiness, we use the current transaction hash
+            let tx_hash = Self::env().transaction_hash().unwrap_or_else(|| {
+                // Fallback for cases where the transaction hash is not available (e.g. in tests)
+                Self::env().hash_bytes::<ink::env::hash::Blake2x256>(
+                    &[current_time.to_be_bytes(), block_number.to_be_bytes(), caller.as_ref()].concat()
+                )
+            });
+            
+            let execution_event = ExecutionEvent {
+                id: execution_id,
+                request_id,
+                wallet_address: request.wallet_address,
+                amount: request.amount,
+                transaction_hash: tx_hash,
+                block_number,
+                timestamp: current_time,
+            };
+            
+            // Store the execution event
+            self.execution_events.insert(execution_id, &execution_event);
+            
+            // Emit request executed event
+            Self::env().emit_event(RequestExecuted {
+                request_id,
+                wallet_address: request.wallet_address,
+                amount: request.amount,
+                timestamp: current_time,
+            });
+            
+            Ok(())
+        }
     }
     
     /// Unit tests for the contract
@@ -391,6 +621,182 @@ mod lsrwa_express {
             
             // Test that getting a non-existent user returns None
             assert!(contract.get_user(accounts.bob).is_none());
+        }
+        
+        /// Test creating a deposit request
+        #[ink::test]
+        fn test_create_deposit_request() {
+            let accounts = get_default_accounts();
+            let mut contract = init_contract();
+            
+            // Set the caller to Bob for this test
+            test::set_caller::<Env>(accounts.bob);
+            
+            // Create a deposit request
+            let deposit_amount = 1000;
+            let request_id = contract.create_deposit_request(deposit_amount).expect("Should create deposit request");
+            
+            // Verify the request ID is 1
+            assert_eq!(request_id, 1);
+            
+            // Verify the request count is updated
+            assert_eq!(contract.get_request_count(RequestType::Deposit), 1);
+            
+            // Verify the request exists and has the correct data
+            let request = contract.get_request(request_id).expect("Request should exist");
+            assert_eq!(request.id, request_id);
+            assert_eq!(request.request_type, RequestType::Deposit);
+            assert_eq!(request.wallet_address, accounts.bob);
+            assert_eq!(request.amount, deposit_amount);
+            assert_eq!(request.collateral_amount, None);
+            assert!(!request.is_processed);
+            
+            // Verify the user was created and automatically registered
+            let user = contract.get_user(accounts.bob).expect("User should exist");
+            assert_eq!(user.wallet_address, accounts.bob);
+            assert!(user.is_registered);
+            assert_eq!(user.pending_deposits, deposit_amount);
+            assert_eq!(user.active_balance, 0);
+            
+            // Create another deposit request
+            let second_deposit_amount = 500;
+            let second_request_id = contract.create_deposit_request(second_deposit_amount).expect("Should create second deposit request");
+            
+            // Verify the request ID is 2
+            assert_eq!(second_request_id, 2);
+            
+            // Verify the request count is updated
+            assert_eq!(contract.get_request_count(RequestType::Deposit), 2);
+            
+            // Verify the user's pending deposits are updated
+            let updated_user = contract.get_user(accounts.bob).expect("User should exist");
+            assert_eq!(updated_user.pending_deposits, deposit_amount + second_deposit_amount);
+        }
+        
+        /// Test creating a deposit request with zero amount
+        #[ink::test]
+        fn test_create_deposit_request_zero_amount() {
+            let accounts = get_default_accounts();
+            let mut contract = init_contract();
+            
+            // Set the caller to Bob for this test
+            test::set_caller::<Env>(accounts.bob);
+            
+            // Try to create a deposit request with zero amount
+            let deposit_amount = 0;
+            let result = contract.create_deposit_request(deposit_amount);
+            
+            // Verify the request fails with the expected error
+            assert!(result.is_err());
+            assert_eq!(result.unwrap_err(), "Amount must be greater than zero");
+            
+            // Verify no request was created
+            assert_eq!(contract.get_request_count(RequestType::Deposit), 0);
+            
+            // Verify no user was created
+            assert!(contract.get_user(accounts.bob).is_none());
+        }
+        
+        /// Test processing a deposit request
+        #[ink::test]
+        fn test_process_deposit_request() {
+            let accounts = get_default_accounts();
+            let mut contract = init_contract();
+            
+            // Set the caller to Bob for registration
+            test::set_caller::<Env>(accounts.bob);
+            
+            // Create a deposit request (which automatically registers the user)
+            let deposit_amount = 1000;
+            let request_id = contract.create_deposit_request(deposit_amount).expect("Should create deposit request");
+            
+            // Verify the user is registered
+            let user = contract.get_user(accounts.bob).expect("User should exist");
+            assert!(user.is_registered);
+            
+            // Set the caller back to Alice (owner) to process the deposit
+            test::set_caller::<Env>(accounts.alice);
+            
+            // Process the deposit request
+            contract.process_deposit_request(request_id).expect("Should process deposit request");
+            
+            // Verify the request is now processed
+            let request = contract.get_request(request_id).expect("Request should exist");
+            assert!(request.is_processed);
+            
+            // Verify the user's balances are updated
+            let user = contract.get_user(accounts.bob).expect("User should exist");
+            assert_eq!(user.active_balance, deposit_amount);
+            assert_eq!(user.pending_deposits, 0);
+        }
+        
+        /// Test registration approval process
+        #[ink::test]
+        fn test_registration_approval() {
+            let accounts = get_default_accounts();
+            let mut contract = init_contract();
+            
+            // Set the caller to Bob for registration
+            test::set_caller::<Env>(accounts.bob);
+            
+            // Create a deposit request to register the user
+            let deposit_amount = 1000;
+            let request_id = contract.create_deposit_request(deposit_amount).expect("Should create deposit request");
+            
+            // Verify the user exists but is not registered yet
+            let user = contract.get_user(accounts.bob).expect("User should exist");
+            assert!(!user.is_registered);
+            
+            // Set the caller back to Alice (owner) to approve registration
+            test::set_caller::<Env>(accounts.alice);
+            
+            // Approve Bob's registration
+            contract.update_registration_status(accounts.bob, true).expect("Should update registration status");
+            
+            // Verify the user is now registered
+            let updated_user = contract.get_user(accounts.bob).expect("User should exist");
+            assert!(updated_user.is_registered);
+            
+            // Test the is_registered function
+            assert!(contract.is_registered(accounts.bob));
+            
+            // Test registration disapproval
+            contract.update_registration_status(accounts.bob, false).expect("Should update registration status");
+            
+            // Verify the user is now unregistered
+            let disapproved_user = contract.get_user(accounts.bob).expect("User should exist");
+            assert!(!disapproved_user.is_registered);
+            
+            // Test the is_registered function again
+            assert!(!contract.is_registered(accounts.bob));
+        }
+        
+        /// Test non-admin/owner trying to update registration or process deposit
+        #[ink::test]
+        fn test_unauthorized_actions() {
+            let accounts = get_default_accounts();
+            let mut contract = init_contract();
+            
+            // Set the caller to Bob for registration
+            test::set_caller::<Env>(accounts.bob);
+            
+            // Create a deposit request
+            let deposit_amount = 1000;
+            let request_id = contract.create_deposit_request(deposit_amount).expect("Should create deposit request");
+            
+            // Try to update registration status (still as Bob)
+            let registration_result = contract.update_registration_status(accounts.bob, true);
+            
+            // Verify the update fails with the expected error
+            assert!(registration_result.is_err());
+            assert_eq!(registration_result.unwrap_err(), "Only owner or admin can update registration status");
+            
+            // Try to process the deposit request (still as Bob)
+            let process_result = contract.process_deposit_request(request_id);
+            
+            // Verify the processing fails with the expected error
+            assert!(process_result.is_err());
+            assert_eq!(process_result.unwrap_err(), "Only owner or admin can process requests");
         }
     }
 } 
