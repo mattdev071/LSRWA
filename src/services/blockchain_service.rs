@@ -17,6 +17,7 @@ use crate::models::blockchain_request::{RequestType, NewBlockchainRequest};
 use crate::db::DbPools;
 use crate::contract::{self, LsrwaExpressContract};
 
+// Define chain metadata - this is for chain-wide interactions, not contract-specific
 // For development, we'll use a mock substrate module
 // #[subxt::subxt(runtime_metadata_path = "metadata.scale")]
 pub mod substrate {
@@ -156,6 +157,7 @@ impl BlockchainService {
     ) -> Result<OnChainRequest> {
         info!("Submitting deposit request for wallet {} with amount {}", wallet_address, amount);
         
+        // Convert amount to on-chain format (fixed point with 12 decimals for UNIT)
         let on_chain_amount = (amount * 1_000_000_000_000.0) as u128;
         
         // Get the blockchain account for the wallet

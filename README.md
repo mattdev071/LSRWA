@@ -1,8 +1,8 @@
 # LSRWA Express Rust
 
-## Contract Deployment and Integration Guide
+## Production-Ready Contract Deployment and Integration Guide
 
-This guide will walk you through deploying the LSRWA Express smart contract to a development, testnet, or production environment and integrating with it from the backend.
+This guide will walk you through deploying the LSRWA Express smart contract to a production or testnet environment and integrating with it from the backend.
 
 ### Prerequisites
 
@@ -17,13 +17,10 @@ Set the following environment variables:
 
 ```bash
 # The RPC URL of the node
-export SUBSTRATE_RPC_URL="wss://rococo-contracts-rpc.polkadot.io:443"
+export SUBSTRATE_RPC_URL="wss://rococo-contracts-rpc.polkadot.io"
 
 # Seed phrase for your wallet (keep this secure!)
 export WALLET_SEED_PHRASE="your mnemonic seed phrase here"
-
-# Contract address (after deployment)
-export CONTRACT_ADDRESS="your_contract_address_here"
 
 # Optional: Contract deployment configuration
 export CONTRACT_WASM_PATH="target/ink/lsrwa_express.wasm"
@@ -42,29 +39,8 @@ The project is organized with proper separation of concerns:
 - `src/services/` - Backend services including blockchain integration
 - `scripts/` - Deployment and metadata tools
 - `metadata/` - Chain metadata storage
-- `migrations/` - Database migration files
 
-### Development Workflow
-
-For local development without a blockchain node:
-
-1. **Generate mock metadata**:
-   ```bash
-   cargo run --bin download_metadata
-   ```
-   This creates mock metadata files for development.
-
-2. **Build and run the application**:
-   ```bash
-   cargo build
-   cargo run
-   ```
-
-The project includes fallbacks for non-wasm32 targets, allowing development on any platform without requiring an actual blockchain connection.
-
-### Production Workflow
-
-#### Building the Contract
+### Building the Contract
 
 ```bash
 # Build the contract
@@ -73,9 +49,9 @@ cargo contract build --release
 
 This will generate the WASM binary and metadata in `target/ink/`.
 
-#### Downloading Chain Metadata
+### Downloading Chain Metadata
 
-Before interacting with the blockchain, download the chain metadata:
+Before interacting with the blockchain, we need to download the chain metadata:
 
 ```bash
 # Run the metadata download script
@@ -84,15 +60,10 @@ cargo run --bin download_metadata
 
 This will create metadata files in both the `metadata/` directory and project root, which our code uses for type information.
 
-#### Deploying the Contract
-
-For WebAssembly targets:
+### Deploying the Contract
 
 ```bash
-# Build for wasm32 target
-cargo build --target wasm32-unknown-unknown
-
-# Run the deployment script
+# Run the production-ready deployment script
 cargo run --bin deploy_contract
 ```
 
@@ -103,7 +74,7 @@ This script will:
 4. Create a `.env.contract` file with the contract address
 5. Output the contract address and transaction details
 
-After deployment, set the `CONTRACT_ADDRESS` environment variable:
+After deployment, the script will automatically set up the necessary configuration files, but you can also manually set the `CONTRACT_ADDRESS` environment variable:
 
 ```bash
 export CONTRACT_ADDRESS="contract_address_from_deployment"
@@ -148,7 +119,6 @@ curl -X POST http://localhost:3000/api/v1/requests/deposit \
 - **Connection Issues**: Check the RPC URL and network connectivity
 - **Transaction Failures**: Check gas limits and account balances
 - **Contract Errors**: Check the contract logs for specific error messages
-- **Compilation Errors**: For non-wasm32 targets, mock implementations are used
 
 ### Production Deployment Checklist
 
