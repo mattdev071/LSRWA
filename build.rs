@@ -45,6 +45,9 @@ pub struct LsrwaExpressContract {
 // Selector for create_deposit_request
 pub const CREATE_DEPOSIT_REQUEST_SELECTOR: [u8; 4] = [0x44, 0x79, 0x78, 0x8a];
 
+// Selector for create_withdrawal_request
+pub const CREATE_WITHDRAWAL_REQUEST_SELECTOR: [u8; 4] = [0x53, 0x8a, 0x4f, 0x2b];
+
 // Result types
 #[derive(Debug)]
 pub enum DepositRequestResult {
@@ -131,6 +134,9 @@ pub struct LsrwaExpressContract {
 // Selector for create_deposit_request
 pub const CREATE_DEPOSIT_REQUEST_SELECTOR: [u8; 4] = [0x44, 0x79, 0x78, 0x8a];
 
+// Selector for create_withdrawal_request
+pub const CREATE_WITHDRAWAL_REQUEST_SELECTOR: [u8; 4] = [0x53, 0x8a, 0x4f, 0x2b];
+
 // Result types
 #[derive(Debug, Encode, Decode)]
 pub enum DepositRequestResult {
@@ -200,6 +206,92 @@ impl LsrwaExpressContract {
         let tx_hash = events.extrinsic_hash();
         
         Ok(tx_hash)
+    }
+    
+    // Create withdrawal request method
+    pub async fn create_withdrawal_request(
+        &self, 
+        signer: &PairSigner<PolkadotConfig, sr25519::Pair>,
+        amount: u128,
+        gas_limit: u64,
+    ) -> Result<H256, Box<dyn std::error::Error>> {
+        use subxt::tx::SubmittableExtrinsic;
+        
+        // Prepare the call data - selector + encoded parameters
+        let mut call_data = CREATE_WITHDRAWAL_REQUEST_SELECTOR.to_vec();
+        
+        // Encode the amount parameter (SCALE encoding)
+        let mut amount_bytes = Vec::new();
+        amount.encode_to(&mut amount_bytes);
+        call_data.extend(amount_bytes);
+        
+        // Contract call
+        use crate::substrate::tx::contracts::call;
+        
+        // Value to send with the call (0 for now)
+        let value = 0u128;
+        
+        // Call parameters
+        let params = call {
+            dest: MultiAddress::Id(self.address.into()),
+            value,
+            gas_limit,
+            storage_deposit_limit: None,
+            data: call_data,
+        };
+        
+        // Create the signed transaction
+        let tx = self.client
+            .tx()
+            .create_signed(&params, signer, Default::default())
+            .await?;
+            
+        // Submit and watch for finalization
+        let events = tx.submit_and_watch()
+            .await?
+            .wait_for_finalized_success()
+            .await?;
+            
+        // Get the transaction hash
+        let tx_hash = events.extrinsic_hash();
+        
+        Ok(tx_hash)
+    }
+}
+
+/// Estimates gas for a deposit request
+pub fn estimate_gas_for_deposit_request(amount: u128) -> u64 {
+    // For now, use a simple gas estimation based on the amount
+    // In production, this would be more sophisticated
+    let base_gas = 500_000;
+    let variable_gas = (amount / 1_000_000) as u64;
+    
+    // Get the gas limit from environment if available
+    let env_gas_limit = std::env::var("DEPOSIT_GAS_LIMIT")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok());
+    
+    match env_gas_limit {
+        Some(limit) => limit,
+        None => base_gas + variable_gas.min(500_000), // Cap at additional 500k gas
+    }
+}
+
+/// Estimates gas for a withdrawal request
+pub fn estimate_gas_for_withdrawal_request(amount: u128) -> u64 {
+    // For now, use a simple gas estimation based on the amount
+    // In production, this would be more sophisticated
+    let base_gas = 600_000; // Slightly higher than deposit due to balance checks
+    let variable_gas = (amount / 1_000_000) as u64;
+    
+    // Get the gas limit from environment if available
+    let env_gas_limit = std::env::var("WITHDRAWAL_GAS_LIMIT")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok());
+    
+    match env_gas_limit {
+        Some(limit) => limit,
+        None => base_gas + variable_gas.min(500_000), // Cap at additional 500k gas
     }
 }
 "#;

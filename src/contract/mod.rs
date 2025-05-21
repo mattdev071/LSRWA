@@ -1,17 +1,28 @@
 //! Contract interface module for LSRWA Express
 
+use anyhow::Result;
+
 // Include the generated contract bindings
 include!(concat!(env!("OUT_DIR"), "/generated/contract_bindings.rs"));
-
-// Import the substrate module
-#[cfg(not(target_arch = "wasm32"))]
-pub use subxt::config::substrate;
 
 // A simple gas estimator
 pub fn estimate_gas_for_deposit_request(amount: u128) -> u64 {
     // In a production environment, this would use the dry-run API to estimate gas
     // For now, we'll use a base amount plus some scaling with the input size
     let base_gas: u64 = 5_000_000_000;
+    
+    // More complex logic could be added to account for the complexity of operations
+    // For this example, we'll just add more gas for larger amounts (more digits)
+    let amount_digits = if amount == 0 { 1 } else { (amount as f64).log10() as u64 + 1 };
+    
+    // Adjust gas based on input size
+    base_gas + (amount_digits * 100_000_000)
+}
+
+// Gas estimator for withdrawal requests
+pub fn estimate_gas_for_withdrawal_request(amount: u128) -> u64 {
+    // Withdrawal requests require slightly more gas due to balance checks
+    let base_gas: u64 = 6_000_000_000;
     
     // More complex logic could be added to account for the complexity of operations
     // For this example, we'll just add more gas for larger amounts (more digits)

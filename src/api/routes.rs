@@ -20,7 +20,8 @@ pub fn api_router() -> Router<AppState> {
         .route("/deposits", get(handlers::get_deposit_requests))
         .route("/withdrawals", get(handlers::get_withdrawal_requests))
         .route("/borrows", get(handlers::get_borrow_requests))
-        .route("/deposit", post(handlers::submit_deposit_request));
+        .route("/deposit", post(handlers::submit_deposit_request))
+        .route("/withdraw", post(handlers::submit_withdrawal_request));
     
     // User endpoints
     let user_routes = Router::new()

@@ -17,6 +17,13 @@ pub struct DepositRequestData {
     amount: f64,
 }
 
+/// Withdrawal request data
+#[derive(Debug, Deserialize)]
+pub struct WithdrawalRequestData {
+    wallet_address: String,
+    amount: f64,
+}
+
 /// Deposit request response
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DepositRequestResponse {
@@ -159,6 +166,39 @@ pub async fn submit_deposit_request(
         .await
         .map_err(|e| {
             tracing::error!("Failed to submit deposit request: {}", e);
+            crate::api::error::ApiError::BlockchainRequestFailed
+        })?;
+    
+    // Create the response
+    let response = DepositRequestResponse {
+        request_id: request.id,
+        wallet_address: request.wallet_address,
+        amount: request.amount.clone(),
+        timestamp: request.timestamp,
+        transaction_hash: request.transaction_hash,
+    };
+    
+    Ok(Json(response))
+}
+
+/// Submit a withdrawal request
+pub async fn submit_withdrawal_request(
+    State(state): State<AppState>,
+    Json(payload): Json<WithdrawalRequestData>,
+) -> ApiResult<Json<DepositRequestResponse>> {
+    // Create blockchain service
+    let blockchain_service = BlockchainService::new(state.db.clone(), state.blockchain_state.clone())
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to create blockchain service: {}", e);
+            crate::api::error::ApiError::InternalServerError
+        })?;
+    
+    // Submit the withdrawal request
+    let request = blockchain_service.submit_withdrawal_request(&payload.wallet_address, payload.amount)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to submit withdrawal request: {}", e);
             crate::api::error::ApiError::BlockchainRequestFailed
         })?;
     

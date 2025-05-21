@@ -3,13 +3,23 @@ use log::info;
 use sqlx::{migrate::MigrateDatabase, PgPool, Postgres};
 use std::env;
 
-pub async fn run_migrations(pool: &PgPool) -> Result<()> {
-    info!("Running database migrations");
+/// Runs all migrations
+pub async fn run_migrations(pg_pool: &PgPool) -> Result<()> {
+    info!("Running migrations...");
     
-    let migrations = sqlx::migrate!("./migrations");
-    migrations.run(pool).await.context("Failed to run migrations")?;
+    // Create schema if it doesn't exist
+    sqlx::query("CREATE SCHEMA IF NOT EXISTS lsrwa_express")
+        .execute(pg_pool)
+        .await
+        .context("Failed to create schema")?;
     
-    info!("Database migrations completed successfully");
+    // Run migrations
+    sqlx::migrate!("./migrations")
+        .run(pg_pool)
+        .await
+        .context("Failed to run migrations")?;
+    
+    info!("Migrations completed successfully");
     
     Ok(())
 }

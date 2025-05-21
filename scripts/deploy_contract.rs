@@ -1,12 +1,6 @@
-use std::{fs, path::Path};
 use anyhow::Result;
-use subxt::{
-    OnlineClient, 
-    PolkadotConfig,
-    tx::PairSigner, 
-    ext::sp_core::{sr25519, Pair as PairTrait, H256},
-};
-use scale::Encode;
+use std::fs;
+use std::path::Path;
 
 #[tokio::main]
 async fn main() -> Result<()> {
