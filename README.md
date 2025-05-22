@@ -1,4 +1,108 @@
-# LSRWA Express Rust
+# LSRWA Express Smart Contract
+
+This repository contains the LSRWA Express smart contract, a hybrid on-chain/off-chain request system for handling deposits, withdrawals, and borrowing.
+
+## Contract Overview
+
+The LSRWA Express contract implements:
+- User registration and management
+- Deposit request handling
+- Withdrawal request processing
+- Borrow request handling with collateral validation
+- Epoch-based batch processing
+- Emergency withdrawal functionality
+
+## Building the Contract
+
+### Prerequisites
+
+- Rust and Cargo (latest stable version)
+- ink! smart contract framework
+- cargo-contract CLI tool (v5.0.3+)
+
+### Setup
+
+1. Install Rust and Cargo:
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+2. Install cargo-contract:
+```bash
+cargo install cargo-contract --force --locked
+```
+
+3. Add Rust source:
+```bash
+rustup component add rust-src
+```
+
+### Building
+
+To build the contract in debug mode:
+```bash
+cd contracts
+cargo contract build
+```
+
+To build the contract in release mode (optimized for deployment):
+```bash
+cd contracts
+cargo contract build --release
+```
+
+The build artifacts will be available in the `target/ink` directory:
+- `lsrwa_express_contract.contract` (code + metadata)
+- `lsrwa_express_contract.wasm` (the contract's code)
+- `lsrwa_express_contract.json` (the contract's metadata)
+
+### Important Notes on Contract Structure
+
+The contract requires a specific project structure to build correctly with cargo-contract v5.0.3+:
+
+- The main contract file should be named `lib.rs` and placed in the root of the contracts directory (not in src/)
+- The Cargo.toml should specify `path = "lib.rs"` in the `[lib]` section
+- The contract should use ink! v5.1.1 or compatible version
+
+### Contract Size Optimization
+
+The release build significantly reduces the contract size:
+- Debug build: ~55.9K (original) / ~32.6K (optimized)
+- Release build: ~55.9K (original) / ~20.4K (optimized)
+
+Using the release build is recommended for production deployment to minimize gas costs.
+
+## Testing
+
+Run the contract tests with:
+```bash
+cd contracts
+cargo test
+```
+
+## Deployment
+
+The contract can be deployed to any Substrate chain that supports ink! smart contracts, such as:
+- Local development node
+- Astar Network
+- Shiden Network
+- Aleph Zero
+
+Use the `lsrwa_express_contract.contract` file from the `target/ink` directory for deployment.
+
+## Off-Chain Integration
+
+This contract is designed to work with off-chain components:
+- User Portal for KYC verification and user interface
+- Request Indexing Service for monitoring on-chain events
+- Epoch Processor for preparing batch updates
+- Admin Dashboard for system management
+
+KYC verification is intended to be handled through Swipelux integration in the off-chain components.
+
+## License
+
+[License information]
 
 ## Production-Ready Contract Deployment and Integration Guide
 

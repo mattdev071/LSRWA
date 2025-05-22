@@ -1,4 +1,10 @@
 #![cfg_attr(not(feature = "std"), no_std, no_main)]
+// Allow the clippy arithmetic side effects warning
+#![allow(clippy::arithmetic_side_effects)]
+// Allow the clippy cast possible truncation warning
+#![allow(clippy::cast_possible_truncation)]
+// Allow the clippy new without default warning
+#![allow(clippy::new_without_default)]
 
 #[ink::contract]
 mod lsrwa_express {
@@ -306,7 +312,7 @@ mod lsrwa_express {
             
             // Get current request ID and increment for next use
             let request_id = self.next_request_id;
-            self.next_request_id = self.next_request_id.checked_add(1).unwrap_or(request_id);
+            self.next_request_id += 1;
             
             // Get current timestamp
             let current_time = Self::env().block_timestamp();
@@ -331,7 +337,7 @@ mod lsrwa_express {
             
             // Update user's pending deposits
             if let Some(mut user) = self.users.get(caller) {
-                user.pending_deposits = user.pending_deposits.checked_add(amount).unwrap_or(user.pending_deposits);
+                user.pending_deposits += amount;
                 self.users.insert(caller, &user);
             }
             
@@ -378,7 +384,7 @@ mod lsrwa_express {
             
             // Get current request ID and increment for next use
             let request_id = self.next_request_id;
-            self.next_request_id = self.next_request_id.checked_add(1).unwrap_or(request_id);
+            self.next_request_id += 1;
             
             // Get current timestamp
             let current_time = Self::env().block_timestamp();
@@ -403,8 +409,8 @@ mod lsrwa_express {
             
             // Update user's balances
             if let Some(mut user) = self.users.get(caller) {
-                user.active_balance = user.active_balance.checked_sub(amount).unwrap_or(user.active_balance);
-                user.pending_withdrawals = user.pending_withdrawals.checked_add(amount).unwrap_or(user.pending_withdrawals);
+                user.active_balance -= amount;
+                user.pending_withdrawals += amount;
                 self.users.insert(caller, &user);
             }
             
@@ -450,8 +456,8 @@ mod lsrwa_express {
             };
             
             // Update the user's balances
-            user.active_balance = user.active_balance.checked_add(request.amount).unwrap_or(user.active_balance);
-            user.pending_deposits = user.pending_deposits.checked_sub(request.amount).unwrap_or(user.pending_deposits);
+            user.active_balance += request.amount;
+            user.pending_deposits -= request.amount;
             
             // Mark the request as processed
             request.is_processed = true;
@@ -462,7 +468,7 @@ mod lsrwa_express {
             
             // Update the current epoch stats if available
             if let Some(mut epoch) = self.current_epoch.clone() {
-                epoch.processed_deposit_count = epoch.processed_deposit_count.checked_add(1).unwrap_or(epoch.processed_deposit_count);
+                epoch.processed_deposit_count += 1;
                 self.current_epoch = Some(epoch);
             }
             
@@ -509,7 +515,7 @@ mod lsrwa_express {
             
             // Update the user's balances - reduce pending withdrawals
             // Note: active_balance was already reduced when creating the withdrawal request
-            user.pending_withdrawals = user.pending_withdrawals.checked_sub(request.amount).unwrap_or(user.pending_withdrawals);
+            user.pending_withdrawals -= request.amount;
             
             // Mark the request as processed
             request.is_processed = true;
@@ -520,7 +526,7 @@ mod lsrwa_express {
             
             // Update the current epoch stats if available
             if let Some(mut epoch) = self.current_epoch.clone() {
-                epoch.processed_withdrawal_count = epoch.processed_withdrawal_count.checked_add(1).unwrap_or(epoch.processed_withdrawal_count);
+                epoch.processed_withdrawal_count += 1;
                 self.current_epoch = Some(epoch);
             }
             
@@ -546,7 +552,7 @@ mod lsrwa_express {
             }
             
             // Ensure collateral is sufficient (collateral >= amount * min_collateral_ratio / 100)
-            let min_required_collateral = amount.checked_mul(self.min_collateral_ratio).unwrap_or(amount).checked_div(100).unwrap_or(amount);
+            let min_required_collateral = amount * self.min_collateral_ratio / 100;
             if collateral < min_required_collateral {
                 return Err(Error::InsufficientBalance);
             }
@@ -563,7 +569,7 @@ mod lsrwa_express {
             
             // Get current request ID and increment for next use
             let request_id = self.next_request_id;
-            self.next_request_id = self.next_request_id.checked_add(1).unwrap_or(request_id);
+            self.next_request_id += 1;
             
             // Get current timestamp
             let current_time = Self::env().block_timestamp();
@@ -629,7 +635,7 @@ mod lsrwa_express {
             };
             
             // Update the user's balances
-            user.active_balance = user.active_balance.checked_add(request.amount).unwrap_or(user.active_balance);
+            user.active_balance += request.amount;
             
             // Mark the request as processed
             request.is_processed = true;
@@ -640,7 +646,7 @@ mod lsrwa_express {
             
             // Update the current epoch stats if available
             if let Some(mut epoch) = self.current_epoch.clone() {
-                epoch.processed_borrow_count = epoch.processed_borrow_count.checked_add(1).unwrap_or(epoch.processed_borrow_count);
+                epoch.processed_borrow_count += 1;
                 self.current_epoch = Some(epoch);
             }
             
@@ -693,8 +699,8 @@ mod lsrwa_express {
             for request_id in request_ids {
                 // Try to process the deposit request
                 match self.process_deposit_request(request_id) {
-                    Ok(_) => processed_count = processed_count.checked_add(1).unwrap_or(processed_count),
-                    Err(_) => failed_count = failed_count.checked_add(1).unwrap_or(failed_count),
+                    Ok(_) => processed_count += 1,
+                    Err(_) => failed_count += 1,
                 }
             }
             
@@ -729,8 +735,8 @@ mod lsrwa_express {
             for request_id in request_ids {
                 // Try to process the withdrawal request
                 match self.process_withdrawal_request(request_id) {
-                    Ok(_) => processed_count = processed_count.checked_add(1).unwrap_or(processed_count),
-                    Err(_) => failed_count = failed_count.checked_add(1).unwrap_or(failed_count),
+                    Ok(_) => processed_count += 1,
+                    Err(_) => failed_count += 1,
                 }
             }
             
@@ -765,8 +771,8 @@ mod lsrwa_express {
             for request_id in request_ids {
                 // Try to process the borrow request
                 match self.process_borrow_request(request_id) {
-                    Ok(_) => processed_count = processed_count.checked_add(1).unwrap_or(processed_count),
-                    Err(_) => failed_count = failed_count.checked_add(1).unwrap_or(failed_count),
+                    Ok(_) => processed_count += 1,
+                    Err(_) => failed_count += 1,
                 }
             }
             
@@ -819,7 +825,7 @@ mod lsrwa_express {
             
             // Create a new epoch
             let new_epoch_id = self.next_epoch_id;
-            self.next_epoch_id = self.next_epoch_id.checked_add(1).unwrap_or(self.next_epoch_id);
+            self.next_epoch_id += 1;
             
             let new_epoch = Epoch {
                 id: new_epoch_id,
@@ -944,7 +950,7 @@ mod lsrwa_express {
             // For demo purposes, we'll just check a few known accounts
             // In a real implementation, you would maintain a separate total
             if let Some(owner_user) = self.users.get(self.owner) {
-                total = total.checked_add(owner_user.pending_deposits).unwrap_or(total);
+                total += owner_user.pending_deposits;
             }
             
             total
@@ -961,7 +967,7 @@ mod lsrwa_express {
             // For demo purposes, we'll just check a few known accounts
             // In a real implementation, you would maintain a separate total
             if let Some(owner_user) = self.users.get(self.owner) {
-                total = total.checked_add(owner_user.pending_withdrawals).unwrap_or(total);
+                total += owner_user.pending_withdrawals;
             }
             
             total
