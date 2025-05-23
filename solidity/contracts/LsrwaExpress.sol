@@ -18,7 +18,6 @@ contract LsrwaExpress {
         uint256 timestamp;
         bool isProcessed;
         uint256 processedAmount; // For tracking partial fulfillment
-        uint128 linkedRequestId; // For linking to follow-up requests
     }
     
     // ======== State Variables ========
@@ -31,11 +30,24 @@ contract LsrwaExpress {
     uint256 public minWithdrawalAmount = 10;
     uint256 public minCollateralRatio = 150; // 150%
     
+    // APR and time-based variables
+    uint256 public annualPercentageRate = 500; // 5.00% APR (stored as basis points, 1% = 100)
+    uint256 public lastEpochTimestamp;
+    uint256 public constant BASIS_POINTS = 10000; // 100.00%
+    uint256 public constant SECONDS_PER_YEAR = 31536000; // 365 days
+    
+    // Reward variables
+    uint256 public rewardRate = 300; // 3.00% annual reward rate (stored as basis points)
+    uint256 public lastRewardCalculationTimestamp;
+    uint256 public totalRewardsDistributed;
+    
     // Mappings
     mapping(uint128 => Request) public requests;
     mapping(address => bool) public registeredUsers;
     mapping(address => uint256) public userBalances;
     mapping(address => uint256) public pendingDeposits;
+    mapping(address => uint256) public userRewards;
+    mapping(address => uint256) public lastUserRewardTimestamp;
     mapping(address => uint128[]) public userDepositRequests;
     mapping(address => uint128[]) public userWithdrawalRequests;
     mapping(address => uint128[]) public userBorrowRequests;
@@ -89,10 +101,28 @@ contract LsrwaExpress {
         uint256 amount
     );
     
-    event PartialRequestFulfillment(
-        uint128 indexed originalRequestId,
-        uint128 indexed newRequestId,
-        uint256 remainingAmount
+    event AprUpdated(
+        uint256 oldApr,
+        uint256 newApr
+    );
+    
+    event EpochUpdated(
+        uint256 timestamp
+    );
+    
+    event RewardRateUpdated(
+        uint256 oldRate,
+        uint256 newRate
+    );
+    
+    event RewardsCalculated(
+        address indexed walletAddress,
+        uint256 rewardAmount
+    );
+    
+    event RewardsClaimed(
+        address indexed walletAddress,
+        uint256 amount
     );
     
     // ======== Modifiers ========
@@ -107,10 +137,56 @@ contract LsrwaExpress {
         _;
     }
     
+    modifier updateRewards(address walletAddress) {
+        if (registeredUsers[walletAddress]) {
+            calculateRewards(walletAddress);
+        }
+        _;
+    }
+    
     // ======== Constructor ========
     
     constructor() {
         owner = msg.sender;
+        lastEpochTimestamp = block.timestamp;
+        lastRewardCalculationTimestamp = block.timestamp;
+    }
+    
+    // ======== Admin Functions ========
+    
+    /**
+     * @dev Update the APR used for partial fulfillment calculations
+     * @param newApr New APR value in basis points (e.g., 500 = 5.00%)
+     */
+    function updateApr(uint256 newApr) external onlyOwner {
+        require(newApr <= BASIS_POINTS, "APR cannot exceed 100%");
+        
+        uint256 oldApr = annualPercentageRate;
+        annualPercentageRate = newApr;
+        
+        emit AprUpdated(oldApr, newApr);
+    }
+    
+    /**
+     * @dev Update the reward rate
+     * @param newRate New reward rate in basis points (e.g., 300 = 3.00%)
+     */
+    function updateRewardRate(uint256 newRate) external onlyOwner {
+        require(newRate <= BASIS_POINTS, "Reward rate cannot exceed 100%");
+        
+        uint256 oldRate = rewardRate;
+        rewardRate = newRate;
+        
+        emit RewardRateUpdated(oldRate, newRate);
+    }
+    
+    /**
+     * @dev Update the lastEpochTimestamp to the current time
+     */
+    function updateEpoch() external onlyOwner {
+        lastEpochTimestamp = block.timestamp;
+        
+        emit EpochUpdated(lastEpochTimestamp);
     }
     
     // ======== User Management Functions ========
@@ -121,14 +197,15 @@ contract LsrwaExpress {
     function registerUser() external {
         require(!registeredUsers[msg.sender], "User already registered");
         registeredUsers[msg.sender] = true;
+        lastUserRewardTimestamp[msg.sender] = block.timestamp;
         emit UserRegistered(msg.sender);
     }
     
     /**
      * @dev Get user information
      */
-    function getUserBalance(address walletAddress) external view returns (uint256 balance, uint256 pending) {
-        return (userBalances[walletAddress], pendingDeposits[walletAddress]);
+    function getUserBalance(address walletAddress) external view returns (uint256 balance, uint256 pending, uint256 rewards) {
+        return (userBalances[walletAddress], pendingDeposits[walletAddress], userRewards[walletAddress]);
     }
     
     // ======== Request Management Functions ========
@@ -137,7 +214,7 @@ contract LsrwaExpress {
      * @dev Create a deposit request
      * @param amount Amount to deposit
      */
-    function createDepositRequest(uint256 amount) external userRegistered(msg.sender) returns (uint128) {
+    function createDepositRequest(uint256 amount) external userRegistered(msg.sender) updateRewards(msg.sender) returns (uint128) {
         require(amount >= minDepositAmount, "Amount too low");
         require(amount > 0, "Amount zero");
         
@@ -151,8 +228,7 @@ contract LsrwaExpress {
             amount: amount,
             timestamp: block.timestamp,
             isProcessed: false,
-            processedAmount: 0,
-            linkedRequestId: 0
+            processedAmount: 0
         });
         
         // Add request to user's deposit requests
@@ -170,7 +246,7 @@ contract LsrwaExpress {
      * @dev Create a withdrawal request
      * @param amount Amount to withdraw
      */
-    function createWithdrawalRequest(uint256 amount) external userRegistered(msg.sender) returns (uint128) {
+    function createWithdrawalRequest(uint256 amount) external userRegistered(msg.sender) updateRewards(msg.sender) returns (uint128) {
         require(amount >= minWithdrawalAmount, "Amount too low");
         require(amount > 0, "Amount zero");
         require(userBalances[msg.sender] >= amount, "Insufficient balance");
@@ -185,8 +261,7 @@ contract LsrwaExpress {
             amount: amount,
             timestamp: block.timestamp,
             isProcessed: false,
-            processedAmount: 0,
-            linkedRequestId: 0
+            processedAmount: 0
         });
         
         // Add request to user's withdrawal requests
@@ -205,7 +280,7 @@ contract LsrwaExpress {
      * @param amount Amount to borrow
      * @param collateral Collateral amount
      */
-    function createBorrowRequest(uint256 amount, uint256 collateral) external userRegistered(msg.sender) returns (uint128) {
+    function createBorrowRequest(uint256 amount, uint256 collateral) external userRegistered(msg.sender) updateRewards(msg.sender) returns (uint128) {
         require(amount > 0, "Amount zero");
         
         // Calculate minimum required collateral
@@ -222,8 +297,7 @@ contract LsrwaExpress {
             amount: amount,
             timestamp: block.timestamp,
             isProcessed: false,
-            processedAmount: 0,
-            linkedRequestId: 0
+            processedAmount: 0
         });
         
         // Add request to user's borrow requests
@@ -244,6 +318,83 @@ contract LsrwaExpress {
         return request;
     }
     
+    // ======== Reward Functions ========
+    
+    /**
+     * @dev Calculate rewards for a user based on their balance and time elapsed
+     * @param walletAddress Address of the user
+     */
+    function calculateRewards(address walletAddress) public {
+        // Skip if user is not registered or has no balance
+        if (!registeredUsers[walletAddress] || userBalances[walletAddress] == 0) {
+            return;
+        }
+        
+        // Calculate time elapsed since last reward calculation
+        uint256 lastCalculation = lastUserRewardTimestamp[walletAddress];
+        if (block.timestamp <= lastCalculation) {
+            return;
+        }
+        
+        uint256 timeElapsed = block.timestamp - lastCalculation;
+        
+        // Calculate rewards based on user balance, time elapsed, and reward rate
+        uint256 userBalance = userBalances[walletAddress];
+        uint256 rewardAmount = (userBalance * rewardRate * timeElapsed) / (BASIS_POINTS * SECONDS_PER_YEAR);
+        
+        // Update user rewards
+        userRewards[walletAddress] += rewardAmount;
+        lastUserRewardTimestamp[walletAddress] = block.timestamp;
+        totalRewardsDistributed += rewardAmount;
+        
+        emit RewardsCalculated(walletAddress, rewardAmount);
+    }
+    
+    /**
+     * @dev Get pending rewards for a user
+     * @param walletAddress Address of the user
+     * @return Current rewards plus pending rewards that would be calculated now
+     */
+    function getPendingRewards(address walletAddress) external view returns (uint256) {
+        if (!registeredUsers[walletAddress] || userBalances[walletAddress] == 0) {
+            return userRewards[walletAddress];
+        }
+        
+        // Calculate time elapsed since last reward calculation
+        uint256 lastCalculation = lastUserRewardTimestamp[walletAddress];
+        if (block.timestamp <= lastCalculation) {
+            return userRewards[walletAddress];
+        }
+        
+        uint256 timeElapsed = block.timestamp - lastCalculation;
+        
+        // Calculate pending rewards
+        uint256 userBalance = userBalances[walletAddress];
+        uint256 pendingReward = (userBalance * rewardRate * timeElapsed) / (BASIS_POINTS * SECONDS_PER_YEAR);
+        
+        return userRewards[walletAddress] + pendingReward;
+    }
+    
+    /**
+     * @dev Claim rewards
+     * @param amount Amount of rewards to claim (0 for all)
+     */
+    function claimRewards(uint256 amount) external userRegistered(msg.sender) updateRewards(msg.sender) returns (bool) {
+        uint256 rewardsToClaim = amount > 0 ? amount : userRewards[msg.sender];
+        require(rewardsToClaim > 0, "No rewards to claim");
+        require(rewardsToClaim <= userRewards[msg.sender], "Insufficient rewards");
+        
+        // Update user rewards
+        userRewards[msg.sender] -= rewardsToClaim;
+        
+        // Add rewards to user balance
+        userBalances[msg.sender] += rewardsToClaim;
+        
+        emit RewardsClaimed(msg.sender, rewardsToClaim);
+        
+        return true;
+    }
+    
     // ======== Request Processing Functions ========
     
     /**
@@ -255,6 +406,9 @@ contract LsrwaExpress {
         require(request.walletAddress != address(0), "Request not found");
         require(request.requestType == RequestType.Deposit, "Not deposit request");
         require(!request.isProcessed, "Already processed");
+        
+        // Calculate rewards before updating balance
+        calculateRewards(request.walletAddress);
         
         // Process the deposit
         userBalances[request.walletAddress] += request.amount;
@@ -269,16 +423,46 @@ contract LsrwaExpress {
     }
     
     /**
-     * @dev Process a withdrawal request, with support for partial fulfillment
-     * @param requestId ID of the request to process
-     * @param amountToProcess Amount to process (can be less than the request amount)
+     * @dev Calculate partial fulfillment amount based on time and APR
+     * @param amount Total requested amount
+     * @return The amount that should be processed in the current period
      */
-    function processWithdrawalRequest(uint128 requestId, uint256 amountToProcess) external onlyOwner returns (bool) {
+    function calculatePartialFulfillment(uint256 amount) public view returns (uint256) {
+        // If we're in a new epoch, return the full amount
+        if (block.timestamp <= lastEpochTimestamp) {
+            return amount;
+        }
+        
+        // Calculate time passed since last epoch
+        uint256 secondsPassed = block.timestamp - lastEpochTimestamp;
+        
+        // Calculate time-based factor (percentage of a year)
+        uint256 timeFactor = (secondsPassed * BASIS_POINTS) / SECONDS_PER_YEAR;
+        
+        // Calculate APR-adjusted amount for the time period
+        // amount * (APR * timeFactor / BASIS_POINTS) / BASIS_POINTS
+        uint256 timeBasedAmount = (amount * annualPercentageRate * timeFactor) / (BASIS_POINTS * BASIS_POINTS);
+        
+        // Return the minimum of the calculated amount and the total amount
+        return timeBasedAmount < amount ? timeBasedAmount : amount;
+    }
+    
+    /**
+     * @dev Process a withdrawal request with time-based partial fulfillment
+     * @param requestId ID of the request to process
+     */
+    function processWithdrawalRequest(uint128 requestId) external onlyOwner returns (bool) {
         Request storage request = requests[requestId];
         require(request.walletAddress != address(0), "Request not found");
         require(request.requestType == RequestType.Withdrawal, "Not withdrawal request");
         require(!request.isProcessed, "Already processed");
-        require(amountToProcess > 0 && amountToProcess <= request.amount, "Invalid amount");
+        
+        // Calculate rewards before processing withdrawal
+        calculateRewards(request.walletAddress);
+        
+        // Calculate how much to process based on time and APR
+        uint256 remainingAmount = request.amount - request.processedAmount;
+        uint256 amountToProcess = calculatePartialFulfillment(remainingAmount);
         
         // Update processed amount
         request.processedAmount += amountToProcess;
@@ -286,32 +470,6 @@ contract LsrwaExpress {
         // Check if fully processed
         bool fullyProcessed = (request.processedAmount == request.amount);
         request.isProcessed = fullyProcessed;
-        
-        // If partially processed, create a new request for the remainder
-        if (!fullyProcessed) {
-            uint256 remainingAmount = request.amount - request.processedAmount;
-            uint128 newRequestId = nextRequestId++;
-            
-            // Create the new request with the same timestamp as the original
-            requests[newRequestId] = Request({
-                id: newRequestId,
-                requestType: RequestType.Withdrawal,
-                walletAddress: request.walletAddress,
-                amount: remainingAmount,
-                timestamp: request.timestamp, // Keep the original timestamp
-                isProcessed: false,
-                processedAmount: 0,
-                linkedRequestId: requestId // Link to the original request
-            });
-            
-            // Add to user's withdrawal requests
-            userWithdrawalRequests[request.walletAddress].push(newRequestId);
-            
-            // Set link to the new request
-            request.linkedRequestId = newRequestId;
-            
-            emit PartialRequestFulfillment(requestId, newRequestId, remainingAmount);
-        }
         
         emit RequestProcessed(requestId, request.walletAddress, amountToProcess, fullyProcessed);
         
@@ -327,6 +485,9 @@ contract LsrwaExpress {
         require(request.walletAddress != address(0), "Request not found");
         require(request.requestType == RequestType.Borrow, "Not borrow request");
         require(!request.isProcessed, "Already processed");
+        
+        // Calculate rewards before updating balance
+        calculateRewards(request.walletAddress);
         
         // Process the borrow
         userBalances[request.walletAddress] += request.amount;
@@ -371,17 +532,15 @@ contract LsrwaExpress {
     /**
      * @dev Process multiple withdrawal requests in a batch
      * @param requestIds Array of request IDs to process
-     * @param amounts Array of amounts to process for each request
      */
-    function batchProcessWithdrawalRequests(uint128[] calldata requestIds, uint256[] calldata amounts) external onlyOwner returns (bool) {
+    function batchProcessWithdrawalRequests(uint128[] calldata requestIds) external onlyOwner returns (bool) {
         require(requestIds.length > 0, "Empty batch");
-        require(requestIds.length == amounts.length, "Array length mismatch");
         
         uint32 processedCount = 0;
         uint32 failedCount = 0;
         
         for (uint i = 0; i < requestIds.length; i++) {
-            try this.processWithdrawalRequest(requestIds[i], amounts[i]) returns (bool success) {
+            try this.processWithdrawalRequest(requestIds[i]) returns (bool success) {
                 if (success) {
                     processedCount++;
                 } else {
@@ -430,7 +589,7 @@ contract LsrwaExpress {
      * @dev Execute a processed withdrawal
      * @param requestId ID of the withdrawal request to execute
      */
-    function executeWithdrawal(uint128 requestId) external returns (bool) {
+    function executeWithdrawal(uint128 requestId) external updateRewards(msg.sender) returns (bool) {
         Request storage request = requests[requestId];
         require(request.walletAddress != address(0), "Request not found");
         require(request.requestType == RequestType.Withdrawal, "Not withdrawal request");
@@ -503,9 +662,15 @@ contract LsrwaExpress {
      * @dev Get total pending deposits
      */
     function getTotalPendingDeposits() external view returns (uint256) {
-        // In a production environment, you would maintain a running total
         // For simplicity, we're just checking the owner
         return pendingDeposits[owner];
+    }
+    
+    /**
+     * @dev Get total rewards distributed
+     */
+    function getTotalRewardsDistributed() external view returns (uint256) {
+        return totalRewardsDistributed;
     }
     
     // ======== Receive Function ========
