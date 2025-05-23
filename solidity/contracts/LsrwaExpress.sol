@@ -3,14 +3,12 @@ pragma solidity ^0.8.17;
 
 /**
  * @title LSRWA Express
- * @dev Smart contract for handling deposit, withdrawal, and borrow requests with epoch-based batch processing
+ * @dev Smart contract for handling deposit, withdrawal, and borrow requests with gas-optimized processing
  */
 contract LsrwaExpress {
     // ======== Type Definitions ========
 
     enum RequestType { Deposit, Withdrawal, Borrow }
-    
-    enum EpochStatus { Active, Processing, Completed }
     
     struct Request {
         uint128 id;
@@ -19,31 +17,14 @@ contract LsrwaExpress {
         uint256 amount;
         uint256 timestamp;
         bool isProcessed;
-    }
-    
-    struct User {
-        address walletAddress;
-        bool isRegistered;
-        uint256 activeBalance;
-        uint256 pendingDeposits;
-        uint256 pendingWithdrawals;
-    }
-    
-    struct Epoch {
-        uint32 id;
-        uint256 startTimestamp;
-        uint256 endTimestamp;
-        EpochStatus status;
-        uint32 processedDepositCount;
-        uint32 processedWithdrawalCount;
-        uint32 processedBorrowCount;
+        uint256 processedAmount; // For tracking partial fulfillment
+        uint128 linkedRequestId; // For linking to follow-up requests
     }
     
     // ======== State Variables ========
     
     address public owner;
     uint128 public nextRequestId = 1;
-    uint32 public nextEpochId = 2;
     
     // Minimum amounts and ratios
     uint256 public minDepositAmount = 10;
@@ -52,14 +33,12 @@ contract LsrwaExpress {
     
     // Mappings
     mapping(uint128 => Request) public requests;
-    mapping(address => User) public users;
+    mapping(address => bool) public registeredUsers;
+    mapping(address => uint256) public userBalances;
+    mapping(address => uint256) public pendingDeposits;
     mapping(address => uint128[]) public userDepositRequests;
     mapping(address => uint128[]) public userWithdrawalRequests;
     mapping(address => uint128[]) public userBorrowRequests;
-    mapping(uint32 => Epoch) public epochs;
-    
-    // Current epoch
-    Epoch public currentEpoch;
     
     // ======== Events ========
     
@@ -78,7 +57,8 @@ contract LsrwaExpress {
     event RequestProcessed(
         uint128 indexed requestId,
         address indexed walletAddress,
-        uint256 amount
+        uint256 amount,
+        bool fullyProcessed
     );
     
     event UserRegistered(
@@ -98,15 +78,6 @@ contract LsrwaExpress {
         uint32 failedCount
     );
     
-    event EpochClosed(
-        uint32 indexed epochId,
-        uint256 startTimestamp,
-        uint256 endTimestamp,
-        uint32 processedDepositCount,
-        uint32 processedWithdrawalCount,
-        uint32 processedBorrowCount
-    );
-    
     event WithdrawalExecuted(
         uint128 indexed requestId,
         address indexed walletAddress,
@@ -118,6 +89,12 @@ contract LsrwaExpress {
         uint256 amount
     );
     
+    event PartialRequestFulfillment(
+        uint128 indexed originalRequestId,
+        uint128 indexed newRequestId,
+        uint256 remainingAmount
+    );
+    
     // ======== Modifiers ========
     
     modifier onlyOwner() {
@@ -125,13 +102,8 @@ contract LsrwaExpress {
         _;
     }
     
-    modifier userExists(address walletAddress) {
-        require(users[walletAddress].walletAddress != address(0), "User not found");
-        _;
-    }
-    
     modifier userRegistered(address walletAddress) {
-        require(users[walletAddress].isRegistered, "User not registered");
+        require(registeredUsers[walletAddress], "User not registered");
         _;
     }
     
@@ -139,17 +111,6 @@ contract LsrwaExpress {
     
     constructor() {
         owner = msg.sender;
-        
-        // Create the initial epoch
-        currentEpoch = Epoch({
-            id: 1,
-            startTimestamp: block.timestamp,
-            endTimestamp: 0,
-            status: EpochStatus.Active,
-            processedDepositCount: 0,
-            processedWithdrawalCount: 0,
-            processedBorrowCount: 0
-        });
     }
     
     // ======== User Management Functions ========
@@ -158,30 +119,16 @@ contract LsrwaExpress {
      * @dev Register a new user
      */
     function registerUser() external {
-        address walletAddress = msg.sender;
-        
-        // Check if user already exists
-        if (users[walletAddress].walletAddress != address(0)) {
-            require(!users[walletAddress].isRegistered, "User already registered");
-            users[walletAddress].isRegistered = true;
-        } else {
-            users[walletAddress] = User({
-                walletAddress: walletAddress,
-                isRegistered: true,
-                activeBalance: 0,
-                pendingDeposits: 0,
-                pendingWithdrawals: 0
-            });
-        }
-        
-        emit UserRegistered(walletAddress);
+        require(!registeredUsers[msg.sender], "User already registered");
+        registeredUsers[msg.sender] = true;
+        emit UserRegistered(msg.sender);
     }
     
     /**
      * @dev Get user information
      */
-    function getUser(address walletAddress) external view returns (User memory) {
-        return users[walletAddress];
+    function getUserBalance(address walletAddress) external view returns (uint256 balance, uint256 pending) {
+        return (userBalances[walletAddress], pendingDeposits[walletAddress]);
     }
     
     // ======== Request Management Functions ========
@@ -203,15 +150,16 @@ contract LsrwaExpress {
             walletAddress: msg.sender,
             amount: amount,
             timestamp: block.timestamp,
-            isProcessed: false
+            isProcessed: false,
+            processedAmount: 0,
+            linkedRequestId: 0
         });
         
         // Add request to user's deposit requests
         userDepositRequests[msg.sender].push(requestId);
         
         // Update user's pending deposits
-        User storage user = users[msg.sender];
-        user.pendingDeposits += amount;
+        pendingDeposits[msg.sender] += amount;
         
         emit DepositRequested(requestId, msg.sender, amount);
         
@@ -225,9 +173,7 @@ contract LsrwaExpress {
     function createWithdrawalRequest(uint256 amount) external userRegistered(msg.sender) returns (uint128) {
         require(amount >= minWithdrawalAmount, "Amount too low");
         require(amount > 0, "Amount zero");
-        
-        User storage user = users[msg.sender];
-        require(user.activeBalance >= amount, "Insufficient balance");
+        require(userBalances[msg.sender] >= amount, "Insufficient balance");
         
         uint128 requestId = nextRequestId++;
         
@@ -238,15 +184,16 @@ contract LsrwaExpress {
             walletAddress: msg.sender,
             amount: amount,
             timestamp: block.timestamp,
-            isProcessed: false
+            isProcessed: false,
+            processedAmount: 0,
+            linkedRequestId: 0
         });
         
         // Add request to user's withdrawal requests
         userWithdrawalRequests[msg.sender].push(requestId);
         
         // Update user's balances
-        user.activeBalance -= amount;
-        user.pendingWithdrawals += amount;
+        userBalances[msg.sender] -= amount;
         
         emit WithdrawalRequested(requestId, msg.sender, amount);
         
@@ -274,7 +221,9 @@ contract LsrwaExpress {
             walletAddress: msg.sender,
             amount: amount,
             timestamp: block.timestamp,
-            isProcessed: false
+            isProcessed: false,
+            processedAmount: 0,
+            linkedRequestId: 0
         });
         
         // Add request to user's borrow requests
@@ -307,45 +256,64 @@ contract LsrwaExpress {
         require(request.requestType == RequestType.Deposit, "Not deposit request");
         require(!request.isProcessed, "Already processed");
         
-        User storage user = users[request.walletAddress];
-        
         // Process the deposit
-        user.activeBalance += request.amount;
-        user.pendingDeposits -= request.amount;
+        userBalances[request.walletAddress] += request.amount;
+        pendingDeposits[request.walletAddress] -= request.amount;
+        
         request.isProcessed = true;
+        request.processedAmount = request.amount;
         
-        // Update epoch stats if there is an active epoch
-        if (currentEpoch.status == EpochStatus.Active) {
-            currentEpoch.processedDepositCount++;
-        }
-        
-        emit RequestProcessed(requestId, request.walletAddress, request.amount);
+        emit RequestProcessed(requestId, request.walletAddress, request.amount, true);
         
         return true;
     }
     
     /**
-     * @dev Process a withdrawal request
+     * @dev Process a withdrawal request, with support for partial fulfillment
      * @param requestId ID of the request to process
+     * @param amountToProcess Amount to process (can be less than the request amount)
      */
-    function processWithdrawalRequest(uint128 requestId) external onlyOwner returns (bool) {
+    function processWithdrawalRequest(uint128 requestId, uint256 amountToProcess) external onlyOwner returns (bool) {
         Request storage request = requests[requestId];
         require(request.walletAddress != address(0), "Request not found");
         require(request.requestType == RequestType.Withdrawal, "Not withdrawal request");
         require(!request.isProcessed, "Already processed");
+        require(amountToProcess > 0 && amountToProcess <= request.amount, "Invalid amount");
         
-        User storage user = users[request.walletAddress];
+        // Update processed amount
+        request.processedAmount += amountToProcess;
         
-        // Process the withdrawal
-        user.pendingWithdrawals -= request.amount;
-        request.isProcessed = true;
+        // Check if fully processed
+        bool fullyProcessed = (request.processedAmount == request.amount);
+        request.isProcessed = fullyProcessed;
         
-        // Update epoch stats if there is an active epoch
-        if (currentEpoch.status == EpochStatus.Active) {
-            currentEpoch.processedWithdrawalCount++;
+        // If partially processed, create a new request for the remainder
+        if (!fullyProcessed) {
+            uint256 remainingAmount = request.amount - request.processedAmount;
+            uint128 newRequestId = nextRequestId++;
+            
+            // Create the new request with the same timestamp as the original
+            requests[newRequestId] = Request({
+                id: newRequestId,
+                requestType: RequestType.Withdrawal,
+                walletAddress: request.walletAddress,
+                amount: remainingAmount,
+                timestamp: request.timestamp, // Keep the original timestamp
+                isProcessed: false,
+                processedAmount: 0,
+                linkedRequestId: requestId // Link to the original request
+            });
+            
+            // Add to user's withdrawal requests
+            userWithdrawalRequests[request.walletAddress].push(newRequestId);
+            
+            // Set link to the new request
+            request.linkedRequestId = newRequestId;
+            
+            emit PartialRequestFulfillment(requestId, newRequestId, remainingAmount);
         }
         
-        emit RequestProcessed(requestId, request.walletAddress, request.amount);
+        emit RequestProcessed(requestId, request.walletAddress, amountToProcess, fullyProcessed);
         
         return true;
     }
@@ -360,18 +328,13 @@ contract LsrwaExpress {
         require(request.requestType == RequestType.Borrow, "Not borrow request");
         require(!request.isProcessed, "Already processed");
         
-        User storage user = users[request.walletAddress];
-        
         // Process the borrow
-        user.activeBalance += request.amount;
+        userBalances[request.walletAddress] += request.amount;
+        
         request.isProcessed = true;
+        request.processedAmount = request.amount;
         
-        // Update epoch stats if there is an active epoch
-        if (currentEpoch.status == EpochStatus.Active) {
-            currentEpoch.processedBorrowCount++;
-        }
-        
-        emit RequestProcessed(requestId, request.walletAddress, request.amount);
+        emit RequestProcessed(requestId, request.walletAddress, request.amount, true);
         
         return true;
     }
@@ -408,15 +371,17 @@ contract LsrwaExpress {
     /**
      * @dev Process multiple withdrawal requests in a batch
      * @param requestIds Array of request IDs to process
+     * @param amounts Array of amounts to process for each request
      */
-    function batchProcessWithdrawalRequests(uint128[] calldata requestIds) external onlyOwner returns (bool) {
+    function batchProcessWithdrawalRequests(uint128[] calldata requestIds, uint256[] calldata amounts) external onlyOwner returns (bool) {
         require(requestIds.length > 0, "Empty batch");
+        require(requestIds.length == amounts.length, "Array length mismatch");
         
         uint32 processedCount = 0;
         uint32 failedCount = 0;
         
         for (uint i = 0; i < requestIds.length; i++) {
-            try this.processWithdrawalRequest(requestIds[i]) returns (bool success) {
+            try this.processWithdrawalRequest(requestIds[i], amounts[i]) returns (bool success) {
                 if (success) {
                     processedCount++;
                 } else {
@@ -459,61 +424,6 @@ contract LsrwaExpress {
         return true;
     }
     
-    // ======== Epoch Management Functions ========
-    
-    /**
-     * @dev Close the current epoch and start a new one
-     */
-    function closeCurrentEpoch() external onlyOwner returns (uint32) {
-        require(currentEpoch.status == EpochStatus.Active, "No active epoch");
-        
-        // Update the current epoch
-        currentEpoch.status = EpochStatus.Completed;
-        currentEpoch.endTimestamp = block.timestamp;
-        
-        // Store the completed epoch
-        epochs[currentEpoch.id] = currentEpoch;
-        
-        // Emit event for the closed epoch
-        emit EpochClosed(
-            currentEpoch.id,
-            currentEpoch.startTimestamp,
-            currentEpoch.endTimestamp,
-            currentEpoch.processedDepositCount,
-            currentEpoch.processedWithdrawalCount,
-            currentEpoch.processedBorrowCount
-        );
-        
-        // Create a new epoch
-        uint32 newEpochId = nextEpochId++;
-        currentEpoch = Epoch({
-            id: newEpochId,
-            startTimestamp: block.timestamp,
-            endTimestamp: 0,
-            status: EpochStatus.Active,
-            processedDepositCount: 0,
-            processedWithdrawalCount: 0,
-            processedBorrowCount: 0
-        });
-        
-        return newEpochId;
-    }
-    
-    /**
-     * @dev Get the current epoch information
-     */
-    function getCurrentEpoch() external view returns (Epoch memory) {
-        return currentEpoch;
-    }
-    
-    /**
-     * @dev Get epoch information by ID
-     * @param epochId ID of the epoch
-     */
-    function getEpoch(uint32 epochId) external view returns (Epoch memory) {
-        return epochs[epochId];
-    }
-    
     // ======== Withdrawal Execution Functions ========
     
     /**
@@ -527,11 +437,14 @@ contract LsrwaExpress {
         require(request.isProcessed, "Withdrawal not processed");
         require(request.walletAddress == msg.sender, "Not request owner");
         
+        uint256 amountToWithdraw = request.processedAmount;
+        require(amountToWithdraw > 0, "Nothing to withdraw");
+        
         // Transfer the funds to the user
-        (bool success, ) = payable(msg.sender).call{value: request.amount}("");
+        (bool success, ) = payable(msg.sender).call{value: amountToWithdraw}("");
         require(success, "Transfer failed");
         
-        emit WithdrawalExecuted(requestId, msg.sender, request.amount);
+        emit WithdrawalExecuted(requestId, msg.sender, amountToWithdraw);
         
         return true;
     }
@@ -590,32 +503,9 @@ contract LsrwaExpress {
      * @dev Get total pending deposits
      */
     function getTotalPendingDeposits() external view returns (uint256) {
-        uint256 total = 0;
-        
-        // In a production environment, you would iterate through all users
-        // or maintain a running total. For simplicity, we're just checking the owner.
-        User memory ownerUser = users[owner];
-        if (ownerUser.walletAddress != address(0)) {
-            total += ownerUser.pendingDeposits;
-        }
-        
-        return total;
-    }
-    
-    /**
-     * @dev Get total pending withdrawals
-     */
-    function getTotalPendingWithdrawals() external view returns (uint256) {
-        uint256 total = 0;
-        
-        // In a production environment, you would iterate through all users
-        // or maintain a running total. For simplicity, we're just checking the owner.
-        User memory ownerUser = users[owner];
-        if (ownerUser.walletAddress != address(0)) {
-            total += ownerUser.pendingWithdrawals;
-        }
-        
-        return total;
+        // In a production environment, you would maintain a running total
+        // For simplicity, we're just checking the owner
+        return pendingDeposits[owner];
     }
     
     // ======== Receive Function ========
